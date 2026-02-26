@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>나만의 할 일 관리</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1 class="title">나만의 할 일 관리</h1>
+    </header>
+
+    <section class="input-section">
+      <input
+        type="text"
+        id="todo-input"
+        class="todo-input"
+        placeholder="할 일을 입력하세요"
+        maxlength="200"
+        autocomplete="off"
+      />
+      <button type="button" id="add-btn" class="btn btn-add">추가</button>
+    </section>
+
+    <section class="filter-section" aria-label="목록 필터">
+      <button type="button" class="filter-btn active" data-filter="all">전체</button>
+      <button type="button" class="filter-btn" data-filter="active">미완료</button>
+      <button type="button" class="filter-btn" data-filter="done">완료됨</button>
+    </section>
+
+    <main class="todo-list-section">
+      <ul id="todo-list" class="todo-list" aria-label="할 일 목록"></ul>
+      <p id="empty-message" class="empty-message">아직 할 일이 없습니다.</p>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
