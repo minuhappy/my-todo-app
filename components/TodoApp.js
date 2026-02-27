@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { createSupabaseClient } from '@/lib/supabase';
 
 const STORAGE_KEY = 'my-todo-app';
@@ -39,8 +40,23 @@ export default function TodoApp() {
   const [dragOverIndex, setDragOverIndex] = useState(null);
 
   useEffect(() => {
-    const client = createSupabaseClient();
-    setSupabase(client);
+    let cancelled = false;
+    (async () => {
+      // 1) API 라우트에서 설정 가져오기 (Netlify 등 배포 환경에서 런타임 env 사용)
+      try {
+        const res = await fetch('/api/supabase-config');
+        if (res.ok) {
+          const { url, anonKey } = await res.json();
+          if (url && anonKey && !cancelled) {
+            setSupabase(createClient(url, anonKey));
+            return;
+          }
+        }
+      } catch (_) {}
+      // 2) 빌드 시 주입된 NEXT_PUBLIC_* 사용 (로컬 .env.local)
+      if (!cancelled) setSupabase(createSupabaseClient());
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const loadTodos = useCallback(async () => {
