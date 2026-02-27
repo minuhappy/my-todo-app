@@ -5,9 +5,10 @@
   const emptyMessage = document.getElementById('empty-message');
   const filterBtns = document.querySelectorAll('.filter-btn');
 
-  let todos = loadTodos();
-  let filter = 'all'; // 'all' | 'active' | 'done'
-  renderTodos();
+  let todos = [];
+  let filter = 'all';
+  let supabase = null;
+  const STORAGE_KEY = 'my-todo-app';
 
   function getFilteredTodos() {
     if (filter === 'active') return todos.filter(function (t) { return !t.done; });
@@ -15,19 +16,62 @@
     return todos;
   }
 
-  function loadTodos() {
+  function loadFromStorage() {
     try {
-      const saved = localStorage.getItem('my-todo-app');
+      const saved = localStorage.getItem(STORAGE_KEY);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   }
 
-  function saveTodos() {
+  function saveToStorage() {
     try {
-      localStorage.setItem('my-todo-app', JSON.stringify(todos));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
     } catch (_) {}
+  }
+
+  function rowToTodo(row) {
+    return {
+      id: row.id,
+      text: row.text,
+      done: row.done,
+      order_index: row.order_index != null ? row.order_index : 0,
+    };
+  }
+
+  async function getConfig() {
+    if (window.__SUPABASE_CONFIG__ && window.__SUPABASE_CONFIG__.url && window.__SUPABASE_CONFIG__.anonKey) {
+      return window.__SUPABASE_CONFIG__;
+    }
+    try {
+      const res = await fetch('/.netlify/functions/supabase-config');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data.url && data.anonKey) ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function loadTodos() {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('todos')
+        .select('id, text, done, order_index')
+        .order('order_index', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (!error && data) {
+        todos = data.map(rowToTodo);
+        renderTodos();
+        return;
+      }
+    }
+    var stored = loadFromStorage();
+    todos = stored.map(function (t, i) {
+      return { id: t.id || 'local-' + i, text: t.text, done: t.done, order_index: i };
+    });
+    renderTodos();
   }
 
   function renderTodos() {
@@ -41,6 +85,7 @@
       const li = document.createElement('li');
       li.className = 'todo-item' + (todo.done ? ' done' : '');
       li.setAttribute('data-index', index);
+      li.setAttribute('data-id', todo.id || '');
       li.draggable = true;
       li.setAttribute('aria-label', '순서 변경 가능');
 
@@ -53,9 +98,7 @@
       checkbox.className = 'todo-checkbox';
       checkbox.checked = todo.done;
       checkbox.setAttribute('aria-label', '완료 표시');
-      checkbox.addEventListener('change', function () {
-        toggleDone(index);
-      });
+      checkbox.addEventListener('change', function () { toggleDone(index); });
 
       const span = document.createElement('span');
       span.className = 'todo-text';
@@ -66,9 +109,7 @@
       deleteBtn.className = 'btn btn-delete';
       deleteBtn.textContent = '삭제';
       deleteBtn.setAttribute('aria-label', '삭제');
-      deleteBtn.addEventListener('click', function () {
-        removeTodo(index);
-      });
+      deleteBtn.addEventListener('click', function () { removeTodo(index); });
 
       li.appendChild(dragHandle);
       li.appendChild(checkbox);
@@ -84,26 +125,19 @@
       });
       li.addEventListener('dragend', function () {
         li.classList.remove('dragging');
-        todoList.querySelectorAll('.todo-item.drag-over').forEach(function (el) {
-          el.classList.remove('drag-over');
-        });
+        todoList.querySelectorAll('.todo-item.drag-over').forEach(function (el) { el.classList.remove('drag-over'); });
       });
       li.addEventListener('dragover', function (e) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         var targetLi = e.target.closest('li.todo-item');
-        if (!targetLi) return;
-        if (targetLi.classList.contains('dragging')) return;
-        todoList.querySelectorAll('.todo-item.drag-over').forEach(function (el) {
-          el.classList.remove('drag-over');
-        });
+        if (!targetLi || targetLi.classList.contains('dragging')) return;
+        todoList.querySelectorAll('.todo-item.drag-over').forEach(function (el) { el.classList.remove('drag-over'); });
         targetLi.classList.add('drag-over');
       });
       li.addEventListener('dragleave', function (e) {
         var related = e.relatedTarget;
-        if (!related || !li.contains(related)) {
-          li.classList.remove('drag-over');
-        }
+        if (!related || !li.contains(related)) li.classList.remove('drag-over');
       });
       li.addEventListener('drop', function (e) {
         e.preventDefault();
@@ -115,38 +149,71 @@
     });
   }
 
-  function addTodo() {
+  async function addTodo() {
     const text = todoInput.value.trim();
     if (!text) return;
 
-    todos.push({ text: text, done: false });
+    if (supabase) {
+      var maxOrder = todos.length === 0 ? 0 : Math.max.apply(null, todos.map(function (t) { return t.order_index || 0; }));
+      const { data, error } = await supabase
+        .from('todos')
+        .insert({ text: text, done: false, order_index: maxOrder + 1 })
+        .select('id, text, done, order_index')
+        .single();
+      if (!error && data) {
+        todos.push(rowToTodo(data));
+        todoInput.value = '';
+        renderTodos();
+        todoInput.focus();
+        return;
+      }
+    }
+
+    todos.push({ id: 'local-' + Date.now(), text: text, done: false, order_index: todos.length });
     todoInput.value = '';
-    saveTodos();
+    saveToStorage();
     renderTodos();
     todoInput.focus();
   }
 
-  function toggleDone(index) {
+  async function toggleDone(index) {
     if (index < 0 || index >= todos.length) return;
-    todos[index].done = !todos[index].done;
-    saveTodos();
+    var todo = todos[index];
+    todo.done = !todo.done;
+    if (supabase && todo.id && String(todo.id).indexOf('local-') !== 0) {
+      await supabase.from('todos').update({ done: todo.done }).eq('id', todo.id);
+    } else {
+      saveToStorage();
+    }
     renderTodos();
   }
 
-  function removeTodo(index) {
+  async function removeTodo(index) {
     if (index < 0 || index >= todos.length) return;
+    var todo = todos[index];
+    if (supabase && todo.id && String(todo.id).indexOf('local-') !== 0) {
+      await supabase.from('todos').delete().eq('id', todo.id);
+    }
     todos.splice(index, 1);
-    saveTodos();
+    saveToStorage();
     renderTodos();
   }
 
-  function moveTodo(fromIndex, toIndex) {
+  async function moveTodo(fromIndex, toIndex) {
     if (fromIndex < 0 || fromIndex >= todos.length || toIndex < 0 || toIndex >= todos.length) return;
     if (fromIndex === toIndex) return;
     var item = todos.splice(fromIndex, 1)[0];
     if (toIndex > fromIndex) toIndex--;
     todos.splice(toIndex, 0, item);
-    saveTodos();
+    if (supabase) {
+      var updates = todos.map(function (t, i) { return { id: t.id, order_index: i }; })
+        .filter(function (u) { return u.id && String(u.id).indexOf('local-') !== 0; });
+      for (var i = 0; i < updates.length; i++) {
+        await supabase.from('todos').update({ order_index: updates[i].order_index }).eq('id', updates[i].id);
+      }
+    } else {
+      saveToStorage();
+    }
     renderTodos();
   }
 
@@ -163,4 +230,12 @@
   todoInput.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') addTodo();
   });
+
+  (async function init() {
+    var config = await getConfig();
+    if (config && typeof window.supabase !== 'undefined' && window.supabase.createClient) {
+      supabase = window.supabase.createClient(config.url, config.anonKey);
+    }
+    await loadTodos();
+  })();
 })();
